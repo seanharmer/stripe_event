@@ -1,5 +1,7 @@
 ### [Unreleased] - TBD
 
+### 2.15.0 (May 20, 2026)
+
 - Add Stripe 19 support
 - Add Ruby 4.0 to build matrix (#176)
 
