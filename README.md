@@ -114,6 +114,103 @@ request. Returning `nil` or an empty array provides no secrets; requests without
 any configured secrets are rejected. Errors raised by a provider propagate so
 that a temporary secret-store failure does not acknowledge an unprocessed event.
 
+### Routing webhooks by signing source
+
+Use named sources when different webhook endpoints send the same event type to
+different handlers. For example, platform and Connect endpoints can share your
+Rails webhook URL while retaining separate checkout handlers:
+
+```ruby
+StripeEvent.signing_sources = {
+  platform: ENV['STRIPE_PLATFORM_SIGNING_SECRET'],
+  connect: -> { MySecretStore.connect_webhook_secrets }
+}
+
+StripeEvent.configure do |events|
+  events.subscribe 'checkout.session.completed',
+    Platform::CheckoutSessionCompleted.new, source: :platform
+
+  events.subscribe 'checkout.session.completed',
+    Connect::CheckoutSessionCompleted.new, source: :connect
+
+  events.subscribe 'customer.', source: :connect do |event|
+    # Handle customer.* events authenticated by the Connect source.
+  end
+
+  events.all BillingEventLogger.new(Rails.logger)
+  events.all source: :connect do |event|
+    # Observe every Connect delivery.
+  end
+end
+```
+
+Source names are nonempty, single-line strings or symbols; `:platform` and
+`'platform'` refer to the same source. Source values accept the same strings,
+arrays, and callables as `signing_secrets`. Each configured provider is resolved
+once per request, before signature verification. A callable takes no arguments.
+`nil`, empty arrays, and blank secrets contribute no verification candidates.
+
+The source is selected only after its secret successfully verifies the raw
+request body and Stripe signature. Handlers still receive one `Stripe::Event`
+argument, with no signing secret added to the event. Sources identify configured
+webhook endpoints, not individual connected accounts: use the verified event's
+`account` field for merchant identification and authorization. The source is
+never inferred from that field.
+
+**Subscription behavior:**
+
+- Subscriptions without `source:` receive matching events from every source,
+  including legacy unscoped secrets. Each registration runs once per delivery.
+- Subscriptions with `source:` receive only that source's matching events.
+  Event-type prefixes, callable objects, blocks, and `all` work in both forms.
+- `event_filter` runs once before dispatch. Returning `nil` suppresses both
+  global and scoped subscribers; a replacement event is passed to both.
+- Global subscribers run before scoped subscribers. Subscriber exceptions
+  propagate as before; a global failure can prevent scoped dispatch. Handlers
+  must remain idempotent because Stripe can retry deliveries.
+- `listening?('checkout.session.completed', source: :platform)` checks global
+  and platform listeners, since both would receive that delivery. Without a
+  source, it checks only global listeners.
+
+To rotate a secret, associate both secrets with the same source:
+
+```ruby
+StripeEvent.signing_sources = {
+  platform: [ENV['STRIPE_PLATFORM_SECRET_OLD'], ENV['STRIPE_PLATFORM_SECRET_NEW']],
+  connect: ENV['STRIPE_CONNECT_SIGNING_SECRET']
+}
+```
+
+The first successful verification selects the source and dispatches once, even
+if multiple rotation signatures match. Assigning the same secret to different
+sources raises `ArgumentError` before verification, as does sharing a secret
+between a named source and legacy `signing_secrets`. Provider failures also
+propagate without dispatch. No usable secrets or an invalid signature results
+in the existing HTTP 400 response.
+
+When migrating, **move** each secret out of `signing_secrets` into its named
+source and replace the corresponding subscriptions with scoped ones. Distinct
+legacy secrets may coexist with named sources and reach only global subscribers.
+The `signing_secrets` getter continues to return only legacy secrets. Assigning
+`signing_sources = nil` clears named sources without changing legacy secrets.
+
+For tests or non-Rails integrations, explicitly supply the source after verifying
+the signature yourself:
+
+```ruby
+StripeEvent.instrument(verified_event, source: :platform)
+```
+
+Calling `instrument(event)` without a source reaches only global subscribers.
+Instrumentation itself does not authenticate events or verify that a supplied
+source has configured secrets.
+
+Internally, the existing global notification name and Stripe event payload are
+preserved. Scoped delivery uses a separate `stripe_event_source:` notification
+namespace with the same payload and adapter interface. Custom notification
+consumers should use the public subscription API to avoid observing both streams;
+custom global namespaces should not overlap that reserved prefix.
+
 ## Configuration
 
 If you have built an application that has multiple Stripe accounts--say, each of your customers has their own--you may want to define your own way of retrieving events from Stripe (e.g. perhaps you want to use the [account parameter](https://stripe.com/docs/connect/webhooks) from the top level to detect the customer for the event, then grab their specific API key). You can do this:

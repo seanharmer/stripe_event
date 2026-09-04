@@ -5,7 +5,12 @@ module StripeEvent
     end
 
     def event
-      StripeEvent.instrument(verified_event)
+      event, source = verified_event
+      if source
+        StripeEvent.instrument(event, source: source)
+      else
+        StripeEvent.instrument(event)
+      end
       head :ok
     rescue Stripe::SignatureVerificationError => e
       log_error(e)
@@ -19,23 +24,24 @@ module StripeEvent
     def verified_event
       payload          = request.body.read
       signature        = request.headers['Stripe-Signature']
-      possible_secrets = secrets(payload, signature)
+      candidates       = secrets(payload, signature)
 
-      possible_secrets.each_with_index do |secret, i|
+      candidates.each_with_index do |(source, secret), i|
         begin
-          return Stripe::Webhook.construct_event(payload, signature, secret.to_s)
+          event = Stripe::Webhook.construct_event(payload, signature, secret)
+          return [event, source]
         rescue Stripe::SignatureVerificationError
-          raise if i == possible_secrets.length - 1
+          raise if i == candidates.length - 1
           next
         end
       end
     end
 
     def secrets(payload, signature)
-      possible_secrets = StripeEvent.signing_secrets
-      return possible_secrets if possible_secrets && !possible_secrets.empty?
+      candidates = StripeEvent.signing_candidates
+      return candidates unless candidates.empty?
       raise Stripe::SignatureVerificationError.new(
-              "Cannot verify signature without a `StripeEvent.signing_secret`",
+              "Cannot verify signature without a `StripeEvent.signing_secret` or `StripeEvent.signing_sources`",
               signature, http_body: payload)
     end
 
