@@ -1,5 +1,7 @@
 ### [Unreleased] - TBD
 
+- Support callable signing secrets, resolved once per webhook request.
+
 ### 2.15.0 (May 20, 2026)
 
 - Add Stripe 19 support

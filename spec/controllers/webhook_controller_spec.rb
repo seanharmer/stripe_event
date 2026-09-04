@@ -156,4 +156,33 @@ describe StripeEvent::WebhookController, type: :controller do
       expect(response.code).to eq '422'
     end
   end
+
+  context "with dynamic signing secrets" do
+    it "resolves the provider once per request and observes changes on the next request" do
+      provider = double(:provider)
+      expect(provider).to receive(:call).once.ordered.and_return([secret1])
+      expect(provider).to receive(:call).once.ordered.and_return([secret2])
+      StripeEvent.signing_secrets = provider
+
+      webhook_with_signature charge_succeeded, secret1
+      expect(response.code).to eq '200'
+      webhook_with_signature charge_succeeded, secret2
+      expect(response.code).to eq '200'
+    end
+
+    [nil, []].each do |empty_secrets|
+      it "rejects a provider returning #{empty_secrets.inspect}" do
+        StripeEvent.signing_secrets = -> { empty_secrets }
+        expect(StripeEvent).not_to receive(:instrument)
+        webhook_with_signature charge_succeeded
+        expect(response.code).to eq '400'
+      end
+    end
+
+    it "propagates provider failures without dispatching" do
+      StripeEvent.signing_secrets = -> { raise 'Secret store unavailable' }
+      expect(StripeEvent).not_to receive(:instrument)
+      expect { webhook_with_signature charge_succeeded }.to raise_error('Secret store unavailable')
+    end
+  end
 end

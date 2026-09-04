@@ -32,7 +32,8 @@ module StripeEvent
     end
 
     def secrets(payload, signature)
-      return StripeEvent.signing_secrets if StripeEvent.signing_secret
+      possible_secrets = StripeEvent.signing_secrets
+      return possible_secrets if possible_secrets && !possible_secrets.empty?
       raise Stripe::SignatureVerificationError.new(
               "Cannot verify signature without a `StripeEvent.signing_secret`",
               signature, http_body: payload)

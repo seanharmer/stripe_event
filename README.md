@@ -99,6 +99,21 @@ StripeEvent.signing_secrets = [
 
 (NOTE: `signing_secret=` and `signing_secrets=` are just aliases for one another)
 
+### Dynamic signing secrets
+
+Both setters also accept a callable returning a secret, an array of secrets, or
+`nil`. Arrays may mix static secrets and callables:
+
+```ruby
+StripeEvent.signing_secrets = -> { MySecretStore.webhook_secrets }
+```
+
+Each callable is evaluated without arguments once per webhook request. The
+resolved secrets are reused throughout verification, and refreshed on the next
+request. Returning `nil` or an empty array provides no secrets; requests without
+any configured secrets are rejected. Errors raised by a provider propagate so
+that a temporary secret-store failure does not acknowledge an unprocessed event.
+
 ## Configuration
 
 If you have built an application that has multiple Stripe accounts--say, each of your customers has their own--you may want to define your own way of retrieving events from Stripe (e.g. perhaps you want to use the [account parameter](https://stripe.com/docs/connect/webhooks) from the top level to detect the customer for the event, then grab their specific API key). You can do this:

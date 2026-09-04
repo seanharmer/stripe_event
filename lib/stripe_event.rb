@@ -5,7 +5,6 @@ require "stripe_event/engine" if defined?(Rails)
 module StripeEvent
   class << self
     attr_accessor :adapter, :backend, :namespace, :event_filter
-    attr_reader :signing_secrets
 
     def configure(&block)
       raise ArgumentError, "must provide a block" unless block_given?
@@ -38,8 +37,14 @@ module StripeEvent
     end
     alias signing_secrets= signing_secret=
 
+    def signing_secrets
+      return unless @signing_secrets
+      @signing_secrets.flat_map { |secret| secret.respond_to?(:call) ? secret.call : secret }.compact
+    end
+
     def signing_secret
-      self.signing_secrets && self.signing_secrets.first
+      secrets = signing_secrets
+      secrets && secrets.first
     end
   end
 
