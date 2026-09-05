@@ -211,6 +211,81 @@ namespace with the same payload and adapter interface. Custom notification
 consumers should use the public subscription API to avoid observing both streams;
 custom global namespaces should not overlap that reserved prefix.
 
+### Separate webhook URLs for platform and Connect events
+
+A marketplace might use its platform Stripe account to bill sellers for their
+subscriptions, while connected accounts take payments for customer orders. Both
+flows can emit `checkout.session.completed`, but completing a seller's
+subscription and fulfilling a customer order require different handlers.
+
+Named sources let these flows share a URL. If you prefer each URL to express its
+purpose, mount the engine twice with a `stripe_event_source` route default:
+
+```ruby
+# config/routes.rb
+mount StripeEvent::Engine,
+  at: '/webhooks/stripe/platform',
+  as: :stripe_platform,
+  defaults: { stripe_event_source: 'platform' }
+
+mount StripeEvent::Engine,
+  at: '/webhooks/stripe/connect',
+  as: :stripe_connect,
+  defaults: { stripe_event_source: 'connect' }
+```
+
+Give each mount a unique `as:` name. Configure the matching signing sources and
+handlers in your initializer:
+
+```ruby
+# config/initializers/stripe.rb
+StripeEvent.signing_sources = {
+  platform: ENV['STRIPE_PLATFORM_SIGNING_SECRET'],
+  connect: ENV['STRIPE_CONNECT_SIGNING_SECRET']
+}
+
+StripeEvent.configure do |events|
+  events.subscribe 'checkout.session.completed',
+    SellerSubscriptionCompleted.new, source: :platform
+
+  events.subscribe 'checkout.session.completed',
+    CustomerOrderCompleted.new, source: :connect
+
+  events.all BillingEventLogger.new(Rails.logger)
+end
+```
+
+In Stripe, configure the platform webhook endpoint to send events to
+`https://your-app.example/webhooks/stripe/platform` and the connected-account
+endpoint to send events to `https://your-app.example/webhooks/stripe/connect`.
+Use each endpoint's signing secret for its matching source.
+
+The platform URL verifies only platform secrets and the Connect URL verifies
+only Connect secrets. Posting a Connect-signed event to the platform URL (or the
+reverse) returns HTTP 400 without calling any subscribers. An unknown source or
+one without usable secrets is also rejected, with no fallback to other sources.
+String and symbol source names are equivalent. Rotation arrays and callable
+providers work as described above.
+
+The route default restricts which secrets may authenticate a request; it does
+not bypass signature verification. Only `request.path_parameters` is consulted,
+so query-string and JSON body fields cannot override the configured source.
+Keep this value in fixed route defaults, not a user-supplied URL segment.
+
+Mounts still share StripeEvent's configuration, event filter, and subscriptions.
+Global subscribers receive each accepted delivery once, alongside the matching
+source's subscribers. All configured secret providers are still resolved once
+per request and checked for ambiguous secrets before candidates are restricted
+to the mount. A provider failure in another source therefore still fails the
+request; separate mounts do not provide independent provider availability.
+
+A mount without `stripe_event_source` continues to accept every configured
+source, including legacy unscoped secrets. You can retain such a shared mount
+alongside the restricted URLs during migration. Query or body parameters cannot
+add a source restriction to the shared mount either. When moving secrets to
+named sources, remove their entries from legacy `signing_secrets` as described
+above.
+
 ## Configuration
 
 If you have built an application that has multiple Stripe accounts--say, each of your customers has their own--you may want to define your own way of retrieving events from Stripe (e.g. perhaps you want to use the [account parameter](https://stripe.com/docs/connect/webhooks) from the top level to detect the customer for the event, then grab their specific API key). You can do this:

@@ -39,6 +39,12 @@ module StripeEvent
 
     def secrets(payload, signature)
       candidates = StripeEvent.signing_candidates
+      # Only routing configuration may restrict a mount; query and body params
+      # must not select the source used to authenticate a delivery.
+      if request.path_parameters.key?(:stripe_event_source)
+        source = request.path_parameters[:stripe_event_source].to_s
+        candidates = candidates.select { |name, _| name == source }
+      end
       return candidates unless candidates.empty?
       raise Stripe::SignatureVerificationError.new(
               "Cannot verify signature without a `StripeEvent.signing_secret` or `StripeEvent.signing_sources`",
