@@ -182,9 +182,10 @@ StripeEvent.signing_sources = {
 ```
 
 The first successful verification selects the source and dispatches once, even
-if multiple rotation signatures match. Assigning the same secret to different
+if multiple rotation signatures match. On an unrestricted mount, assigning the same secret to different
 sources raises `ArgumentError` before verification, as does sharing a secret
-between a named source and legacy `signing_secrets`. Provider failures also
+between a named source and legacy `signing_secrets`. A fixed-source mount can
+use shared secrets as described below. Provider failures also
 propagate without dispatch. No usable secrets or an invalid signature results
 in the existing HTTP 400 response.
 
@@ -275,8 +276,8 @@ Keep this value in fixed route defaults, not a user-supplied URL segment.
 Mounts still share StripeEvent's configuration, event filter, and subscriptions.
 Global subscribers receive each accepted delivery once, alongside the matching
 source's subscribers. All configured secret providers are still resolved once
-per request and checked for ambiguous secrets before candidates are restricted
-to the mount. A provider failure in another source therefore still fails the
+per request. Candidates are then restricted to the mount before checking for
+ambiguous secrets. A provider failure in another source therefore still fails the
 request; separate mounts do not provide independent provider availability.
 
 A mount without `stripe_event_source` continues to accept every configured
@@ -285,6 +286,37 @@ alongside the restricted URLs during migration. Query or body parameters cannot
 add a source restriction to the shared mount either. When moving secrets to
 named sources, remove their entries from legacy `signing_secrets` as described
 above.
+
+### Stripe CLI with a shared signing secret
+
+Stripe CLI uses one signing secret for both platform and Connect deliveries.
+With the two fixed-source mounts above, assign that secret to both named sources:
+
+```ruby
+StripeEvent.signing_secrets = []
+StripeEvent.signing_sources = {
+  platform: ENV['STRIPE_CLI_SIGNING_SECRET'],
+  connect: ENV['STRIPE_CLI_SIGNING_SECRET']
+}
+```
+
+```sh
+stripe listen --forward-to localhost:3000/webhooks/stripe/platform \
+  --forward-connect-to localhost:3000/webhooks/stripe/connect
+```
+
+Each URL verifies the signature against its configured source and dispatches
+only that source's subscribers (plus global subscribers). The fixed route
+provides the source distinction: with a shared secret, the signature alone cannot
+distinguish platform from Connect. Payload fields still cannot choose the source.
+Use distinct Dashboard endpoint secrets in deployed environments when you need
+cryptographic separation between sources. Handlers should independently validate
+merchant ownership and the event's expected account scope.
+
+An unrestricted/shared mount still rejects duplicate secrets with `ArgumentError`,
+including when query or body parameters attempt to select a source. Wrong signatures,
+unknown sources and sources without usable secrets remain rejected. All callable
+providers are still resolved once; a failure in another source still propagates.
 
 ## Configuration
 

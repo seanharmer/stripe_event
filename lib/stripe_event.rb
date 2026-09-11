@@ -69,13 +69,15 @@ module StripeEvent
     end
 
     # Internal verification candidates. Resolve all providers before attempting
-    # verification, so ambiguous configuration cannot depend on matching order.
-    def signing_candidates
+    # verification. A fixed mount removes source ambiguity before duplicate checks;
+    # unrestricted mounts still reject secrets owned by more than one source.
+    def signing_candidates(source: nil)
       candidates = Array(signing_secrets).map { |secret| [nil, secret.to_s] }
       signing_sources.each do |source, secrets|
         resolve_secrets(secrets).each { |secret| candidates << [source, secret.to_s] }
       end
       candidates.reject! { |_, secret| secret.strip.empty? }
+      candidates.select! { |name, _| name == source.to_s } unless source.nil?
 
       owners = {}
       candidates.each do |source, secret|

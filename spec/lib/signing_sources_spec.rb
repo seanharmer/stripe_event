@@ -38,6 +38,15 @@ describe "Named signing sources" do
     expect(StripeEvent.signing_candidates).to eq [['platform', 'secret']]
   end
 
+  it "allows a shared secret only when the requested source is explicit" do
+    StripeEvent.signing_sources = { platform: 'shared', connect: ['shared', 'connect-only'] }
+    expect(StripeEvent.signing_candidates(source: :platform)).to eq [['platform', 'shared']]
+    expect(StripeEvent.signing_candidates(source: 'connect')).to eq [['connect', 'shared'], ['connect', 'connect-only']]
+    expect(StripeEvent.signing_candidates(source: 'missing')).to eq []
+    expect(StripeEvent.signing_candidates(source: '')).to eq []
+    expect { StripeEvent.signing_candidates }.to raise_error(ArgumentError, /multiple sources/)
+  end
+
   it "rejects secrets shared by named sources without disclosing them" do
     StripeEvent.signing_sources = { platform: 'private-secret', connect: -> { 'private-secret' } }
     expect { StripeEvent.signing_candidates }.to raise_error(ArgumentError) { |error|

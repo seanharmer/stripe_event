@@ -121,4 +121,51 @@ describe "Source-restricted engine mounts" do
     expect(webhook('/webhooks/stripe/platform', 'rotated-secret').status).to eq 200
     expect(deliveries).to eq [[:global, 'evt_checkout'], [:platform, 'evt_checkout']] * 2
   end
+  context "when sources share the Stripe CLI secret" do
+    before do
+      StripeEvent.signing_sources = { platform: 'cli-secret', connect: 'cli-secret' }
+    end
+
+    it "dispatches only the fixed mount source and global subscribers once" do
+      expect(webhook('/webhooks/stripe/platform', 'cli-secret').status).to eq 200
+      expect(webhook('/webhooks/stripe/connect', 'cli-secret').status).to eq 200
+      expect(deliveries).to eq [[:global, 'evt_checkout'], [:platform, 'evt_checkout'],
+        [:global, 'evt_checkout'], [:connect, 'evt_checkout']]
+    end
+
+    it "still requires a valid signature" do
+      expect(webhook('/webhooks/stripe/platform', 'wrong-secret').status).to eq 400
+      expect(webhook('/webhooks/stripe/connect', 'wrong-secret').status).to eq 400
+      expect(deliveries).to be_empty
+    end
+
+    it "ignores query and body source overrides on restricted mounts" do
+      expect(webhook('/webhooks/stripe/platform?stripe_event_source=connect', 'cli-secret',
+        payload.merge(stripe_event_source: 'connect')).status).to eq 200
+      expect(deliveries).to eq [[:global, 'evt_checkout'], [:platform, 'evt_checkout']]
+    end
+
+    it "rejects ambiguous shared mounts even when parameters claim a source" do
+      expect(webhook('/stripe_event?stripe_event_source=platform', 'cli-secret',
+        payload.merge(stripe_event_source: 'platform')).status).to eq 500
+      expect(deliveries).to be_empty
+    end
+
+    it "resolves every provider once, including other sources" do
+      platform = double(:platform_provider)
+      connect = double(:connect_provider)
+      expect(platform).to receive(:call).once.and_return(['old-platform', 'cli-secret', 'cli-secret'])
+      expect(connect).to receive(:call).once.and_return('cli-secret')
+      StripeEvent.signing_sources = { platform: platform, connect: connect }
+      expect(webhook('/webhooks/stripe/platform', 'cli-secret').status).to eq 200
+      expect(deliveries).to eq [[:global, 'evt_checkout'], [:platform, 'evt_checkout']]
+    end
+
+    it "propagates another source provider's failure without dispatch" do
+      StripeEvent.signing_sources = { platform: 'cli-secret', connect: -> { raise 'provider unavailable' } }
+      expect(webhook('/webhooks/stripe/platform', 'cli-secret').status).to eq 500
+      expect(deliveries).to be_empty
+    end
+  end
+
 end
